@@ -109,6 +109,7 @@ jobs:
             --values infra/envs/values.yaml \
             --set-string image.repository="$IMAGE_REPOSITORY" \
             --set-string image.tag="$IMAGE_TAG" \
+            --set-string image.pullPolicy=Always \
             --set-string imagePullSecrets[0].name="$IMAGE_PULL_SECRET_NAME" \
             --set-string config.twitchUsername="$TWITCH_USERNAME" \
             --set-string config.twitchOauthToken="$TWITCH_OAUTH_TOKEN" \
