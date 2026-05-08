@@ -1,3 +1,5 @@
+mod oauth;
+
 use anyhow::{bail, Context, Result};
 use native_tls::TlsConnector;
 use std::env;
@@ -37,7 +39,7 @@ type SharedState = Arc<Mutex<BotState>>;
 async fn main() -> Result<()> {
     init_logging();
 
-    let config = Config::from_env()?;
+    let config = Config::from_env().await?;
     info!(
         twitch_username = %config.twitch_username,
         twitch_channel = %config.twitch_channel,
@@ -62,9 +64,9 @@ fn init_logging() {
 }
 
 impl Config {
-    fn from_env() -> Result<Self> {
+    async fn from_env() -> Result<Self> {
         let twitch_username = required_env("TWITCH_USERNAME")?.to_lowercase();
-        let twitch_oauth_token = normalize_oauth_token(&required_env("TWITCH_OAUTH_TOKEN")?);
+        let twitch_oauth_token = resolve_twitch_oauth_token().await?;
         let twitch_channel = normalize_channel(&required_env("TWITCH_CHANNEL")?);
         let trigger_text = env_or_default("TRIGGER_TEXT", "game restarting").to_lowercase();
         let response_text = env_or_default("RESPONSE_TEXT", "!play");
@@ -89,6 +91,17 @@ impl Config {
             min_cooldown,
         })
     }
+}
+
+async fn resolve_twitch_oauth_token() -> Result<String> {
+    if let Some(refresh_token) = optional_env("TWITCH_REFRESH_TOKEN") {
+        let client_id = required_env("TWITCH_CLIENT_ID")?;
+        let client_secret = required_env("TWITCH_CLIENT_SECRET")?;
+        let access_token = oauth::refresh_access_token(&client_id, &client_secret, &refresh_token).await?;
+        return Ok(normalize_oauth_token(&access_token));
+    }
+
+    Ok(normalize_oauth_token(&required_env("TWITCH_OAUTH_TOKEN")?))
 }
 
 async fn run(config: Config) -> Result<()> {
@@ -263,6 +276,13 @@ fn required_env(key: &str) -> Result<String> {
     }
 
     Ok(value)
+}
+
+fn optional_env(key: &str) -> Option<String> {
+    env::var(key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 fn env_or_default(key: &str, default: &str) -> String {

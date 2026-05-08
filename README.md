@@ -20,8 +20,19 @@ The deployment is intentionally single-replica because multiple replicas could s
 Required:
 
 - `TWITCH_USERNAME`: Twitch username used by the app.
-- `TWITCH_OAUTH_TOKEN`: Twitch OAuth token for the account. The app accepts both `oauth:<token>` and raw token formats.
 - `TWITCH_CHANNEL`: target channel. The app accepts both `channel` and `#channel` formats.
+
+Preferred OAuth mode:
+
+- `TWITCH_CLIENT_ID`: Twitch app Client ID.
+- `TWITCH_CLIENT_SECRET`: Twitch app Client Secret.
+- `TWITCH_REFRESH_TOKEN`: Twitch user refresh token for the account that writes to chat.
+
+Fallback OAuth mode:
+
+- `TWITCH_OAUTH_TOKEN`: Twitch access token for the account. The app accepts both `oauth:<token>` and raw token formats.
+
+If `TWITCH_REFRESH_TOKEN` is present, the app refreshes a new access token at startup and ignores `TWITCH_OAUTH_TOKEN` for authentication. If Twitch returns a rotated refresh token, the app logs a warning without printing the token value.
 
 Optional:
 
@@ -99,6 +110,9 @@ helm upgrade --install osr-bot infra/chart/osr-bot \
   --set-string image.tag="$IMAGE_TAG" \
   --set-string config.twitchUsername="$TWITCH_USERNAME" \
   --set-string config.twitchOauthToken="$TWITCH_OAUTH_TOKEN" \
+  --set-string config.twitchClientId="$TWITCH_CLIENT_ID" \
+  --set-string config.twitchClientSecret="$TWITCH_CLIENT_SECRET" \
+  --set-string config.twitchRefreshToken="$TWITCH_REFRESH_TOKEN" \
   --set-string config.twitchChannel="$TWITCH_CHANNEL" \
   --set-string config.triggerText="$TRIGGER_TEXT" \
   --set-string config.responseText="$RESPONSE_TEXT" \
@@ -122,12 +136,15 @@ Project variables expected by the deploy pipeline:
 
 Project secrets expected by the deploy pipeline:
 
-- `TWITCH_OAUTH_TOKEN`
+- `TWITCH_CLIENT_ID`
+- `TWITCH_CLIENT_SECRET`
+- `TWITCH_REFRESH_TOKEN`
+- `TWITCH_OAUTH_TOKEN` as fallback
 - Kubernetes access credentials
 
 For GHCR publishing from GitHub Actions, prefer the repository `GITHUB_TOKEN` with package write permissions instead of Docker Hub credentials.
 
-The OAuth token must not be committed in clear text.
+Never commit OAuth tokens, refresh tokens, or client secrets in clear text.
 
 ## Build
 
