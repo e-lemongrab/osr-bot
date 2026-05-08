@@ -6,6 +6,9 @@ image:
 config:
   twitchUsername: ""
   twitchOauthToken: ""
+  twitchClientId: ""
+  twitchClientSecret: ""
+  twitchRefreshToken: ""
   twitchChannel: ""
   triggerText: "game restarting"
   responseText: "!play"
