@@ -1,0 +1,25 @@
+image:
+  repository: sergiotoribio/osr-bot
+  tag: latest
+  pullPolicy: IfNotPresent
+
+config:
+  twitchUsername: ""
+  twitchOauthToken: ""
+  twitchChannel: ""
+  triggerText: "game restarting"
+  responseText: "!play"
+  responseDelaySeconds: 45
+  minCooldownSeconds: 60
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 32Mi
+  limits:
+    cpu: 100m
+    memory: 128Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
