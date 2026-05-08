@@ -1,14 +1,16 @@
 mod oauth;
 
 use anyhow::{bail, Context, Result};
-use native_tls::TlsConnector;
 use std::env;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, WriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
-use tokio_native_tls::{TlsConnector as TokioTlsConnector, TlsStream};
+use tokio_rustls::client::TlsStream;
+use tokio_rustls::rustls::pki_types::ServerName;
+use tokio_rustls::rustls::{ClientConfig, RootCertStore};
+use tokio_rustls::TlsConnector;
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 
@@ -109,10 +111,11 @@ async fn run(config: Config) -> Result<()> {
         .await
         .with_context(|| format!("failed to connect to {TWITCH_IRC_HOST}:{TWITCH_IRC_PORT}"))?;
 
-    let tls_connector = TlsConnector::new().context("failed to create TLS connector")?;
-    let tls_connector = TokioTlsConnector::from(tls_connector);
+    let tls_connector = build_tls_connector();
+    let server_name = ServerName::try_from(TWITCH_IRC_HOST)
+        .context("failed to build Twitch IRC TLS server name")?;
     let tls_stream = tls_connector
-        .connect(TWITCH_IRC_HOST, tcp_stream)
+        .connect(server_name, tcp_stream)
         .await
         .context("failed to establish TLS connection to Twitch IRC")?;
 
@@ -147,6 +150,15 @@ async fn run(config: Config) -> Result<()> {
 
     warn!("Twitch IRC stream ended");
     Ok(())
+}
+
+fn build_tls_connector() -> TlsConnector {
+    let root_store = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let config = ClientConfig::builder()
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+
+    TlsConnector::from(Arc::new(config))
 }
 
 async fn authenticate_and_join(writer: &SharedWriter, config: &Config) -> Result<()> {
