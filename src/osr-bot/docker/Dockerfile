@@ -1,13 +1,3 @@
-FROM rust:1.91-bookworm AS builder
-
-WORKDIR /workspace
-
-COPY Cargo.toml ./
-COPY src/osr-bot/rust/Cargo.toml ./src/osr-bot/rust/Cargo.toml
-COPY src/osr-bot/rust/src ./src/osr-bot/rust/src
-
-RUN cargo build -p osr-bot --release
-
 FROM debian:bookworm-slim AS runtime
 
 RUN apt-get update \
@@ -16,7 +6,7 @@ RUN apt-get update \
 
 RUN useradd --system --uid 10001 --home-dir /nonexistent --shell /usr/sbin/nologin osr-bot
 
-COPY --from=builder /workspace/target/release/osr-bot /usr/local/bin/osr-bot
+COPY dist/osr-bot/osr-bot /usr/local/bin/osr-bot
 
 USER 10001:10001
 
