@@ -54,6 +54,16 @@ Expected duplicate handling:
 
 Only one response should be sent.
 
+## Image registry
+
+The default image repository is GitHub Container Registry:
+
+```text
+ghcr.io/e-lemongrab/osr-bot
+```
+
+This avoids publishing the image under a personal Docker Hub namespace.
+
 ## Kubernetes
 
 The Helm chart lives in:
@@ -102,7 +112,7 @@ helm upgrade --install osr-bot infra/chart/osr-bot \
 
 Project variables expected by the deploy pipeline:
 
-- `IMAGE_REPOSITORY`
+- `IMAGE_REPOSITORY`: defaults to `ghcr.io/e-lemongrab/osr-bot`.
 - `TWITCH_USERNAME`
 - `TWITCH_CHANNEL`
 - `TRIGGER_TEXT`
@@ -113,8 +123,9 @@ Project variables expected by the deploy pipeline:
 Project secrets expected by the deploy pipeline:
 
 - `TWITCH_OAUTH_TOKEN`
-- registry credentials
 - Kubernetes access credentials
+
+For GHCR publishing from GitHub Actions, prefer the repository `GITHUB_TOKEN` with package write permissions instead of Docker Hub credentials.
 
 The OAuth token must not be committed in clear text.
 
@@ -129,5 +140,5 @@ src/osr-bot/docker/Dockerfile
 Example image build:
 
 ```bash
-docker build -f src/osr-bot/docker/Dockerfile -t osr-bot:local .
+docker build -f src/osr-bot/docker/Dockerfile -t ghcr.io/e-lemongrab/osr-bot:local .
 ```
