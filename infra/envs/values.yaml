@@ -1,5 +1,5 @@
 image:
-  repository: sergiotoribio/osr-bot
+  repository: ghcr.io/e-lemongrab/osr-bot
   tag: latest
   pullPolicy: IfNotPresent
 
