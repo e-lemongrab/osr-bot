@@ -21,6 +21,7 @@ jobs:
       NAMESPACE: ${{ secrets.NAMESPACE }}
       TARGET_TRIPLE: aarch64-unknown-linux-gnu
       CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+      IMAGE_PULL_SECRET_NAME: ${{ secrets.IMAGE_PULL_SECRET_NAME }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -86,6 +87,21 @@ jobs:
         env:
           KUBE_CONFIG_B64: ${{ secrets.KUBE_CONFIG_B64 }}
 
+      - name: Configure GHCR image pull secret
+        shell: bash
+        run: |
+          kubectl create secret docker-registry "$IMAGE_PULL_SECRET_NAME" \
+            --namespace "$NAMESPACE" \
+            --docker-server=ghcr.io \
+            --docker-username="$GHCR_USERNAME" \
+            --docker-password="$GHCR_PAT" \
+            --docker-email="$GHCR_EMAIL" \
+            --dry-run=client -o yaml | kubectl apply -f -
+        env:
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_PAT: ${{ secrets.GHCR_PAT }}
+          GHCR_EMAIL: ${{ secrets.GHCR_EMAIL }}
+
       - name: Deploy with Helm
         run: |
           helm upgrade --install osr-bot infra/chart/osr-bot \
@@ -93,6 +109,7 @@ jobs:
             --values infra/envs/values.yaml \
             --set-string image.repository="$IMAGE_REPOSITORY" \
             --set-string image.tag="$IMAGE_TAG" \
+            --set-string imagePullSecrets[0].name="$IMAGE_PULL_SECRET_NAME" \
             --set-string config.twitchUsername="$TWITCH_USERNAME" \
             --set-string config.twitchOauthToken="$TWITCH_OAUTH_TOKEN" \
             --set-string config.twitchClientId="$TWITCH_CLIENT_ID" \
