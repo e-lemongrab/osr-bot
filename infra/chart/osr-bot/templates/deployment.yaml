@@ -22,7 +22,13 @@ spec:
             - name: TWITCH_USERNAME
               value: {{ required "config.twitchUsername is required" .Values.config.twitchUsername | quote }}
             - name: TWITCH_OAUTH_TOKEN
-              value: {{ required "config.twitchOauthToken is required" .Values.config.twitchOauthToken | quote }}
+              value: {{ .Values.config.twitchOauthToken | quote }}
+            - name: TWITCH_CLIENT_ID
+              value: {{ .Values.config.twitchClientId | quote }}
+            - name: TWITCH_CLIENT_SECRET
+              value: {{ .Values.config.twitchClientSecret | quote }}
+            - name: TWITCH_REFRESH_TOKEN
+              value: {{ .Values.config.twitchRefreshToken | quote }}
             - name: TWITCH_CHANNEL
               value: {{ required "config.twitchChannel is required" .Values.config.twitchChannel | quote }}
             - name: TRIGGER_TEXT
