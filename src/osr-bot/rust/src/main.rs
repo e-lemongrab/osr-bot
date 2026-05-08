@@ -8,6 +8,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, WriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio_rustls::client::TlsStream;
+use tokio_rustls::rustls::crypto::ring::default_provider;
 use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::TlsConnector;
@@ -40,6 +41,7 @@ type SharedState = Arc<Mutex<BotState>>;
 #[tokio::main]
 async fn main() -> Result<()> {
     init_logging();
+    install_rustls_crypto_provider();
 
     let config = Config::from_env().await?;
     info!(
@@ -63,6 +65,12 @@ fn init_logging() {
         .with_target(false)
         .compact()
         .init();
+}
+
+fn install_rustls_crypto_provider() {
+    if default_provider().install_default().is_ok() {
+        debug!("installed rustls ring crypto provider");
+    }
 }
 
 impl Config {
