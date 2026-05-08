@@ -3,6 +3,8 @@ image:
   tag: latest
   pullPolicy: IfNotPresent
 
+imagePullSecrets: []
+
 config:
   twitchUsername: ""
   twitchOauthToken: ""
