@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "osr-bot.fullname" . }}
+  labels:
+    {{- include "osr-bot.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "osr-bot.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "osr-bot.selectorLabels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: osr-bot
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: TWITCH_USERNAME
+              value: {{ required "config.twitchUsername is required" .Values.config.twitchUsername | quote }}
+            - name: TWITCH_OAUTH_TOKEN
+              value: {{ required "config.twitchOauthToken is required" .Values.config.twitchOauthToken | quote }}
+            - name: TWITCH_CHANNEL
+              value: {{ required "config.twitchChannel is required" .Values.config.twitchChannel | quote }}
+            - name: TRIGGER_TEXT
+              value: {{ .Values.config.triggerText | quote }}
+            - name: RESPONSE_TEXT
+              value: {{ .Values.config.responseText | quote }}
+            - name: RESPONSE_DELAY_SECONDS
+              value: {{ .Values.config.responseDelaySeconds | quote }}
+            - name: MIN_COOLDOWN_SECONDS
+              value: {{ .Values.config.minCooldownSeconds | quote }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

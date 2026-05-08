@@ -1,1 +1,5 @@
-#
+[workspace]
+resolver = "2"
+members = [
+    "src/osr-bot/rust",
+]
