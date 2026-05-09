@@ -51,6 +51,12 @@ spec:
               value: {{ .Values.config.deathTriggerText | quote }}
             - name: DEATH_COORDINATE_DELAY_SECONDS
               value: {{ .Values.config.deathCoordinateDelaySeconds | quote }}
+            - name: REMOVED_TRIGGER_TEXT
+              value: {{ .Values.config.removedTriggerText | quote }}
+            - name: REMOVED_PLAY_DELAY_SECONDS
+              value: {{ .Values.config.removedPlayDelaySeconds | quote }}
+            - name: REMOVED_COORDINATE_DELAY_SECONDS
+              value: {{ .Values.config.removedCoordinateDelaySeconds | quote }}
             - name: MIN_COORDINATE_COOLDOWN_SECONDS
               value: {{ .Values.config.minCoordinateCooldownSeconds | quote }}
           resources:
