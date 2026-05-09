@@ -12,7 +12,7 @@ config:
   twitchClientSecret: ""
   twitchRefreshToken: ""
   twitchChannel: ""
-  triggerText: "game restarting"
+  triggerText: "game is restarting"
   responseText: "!play"
   responseDelaySeconds: 45
   minCooldownSeconds: 60
