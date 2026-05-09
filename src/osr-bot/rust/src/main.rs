@@ -31,6 +31,9 @@ struct Config {
     post_play_coordinate_delay: Duration,
     death_trigger_text: String,
     death_coordinate_delay: Duration,
+    removed_trigger_text: String,
+    removed_play_delay: Duration,
+    removed_coordinate_delay: Duration,
     min_coordinate_cooldown: Duration,
 }
 
@@ -62,6 +65,9 @@ async fn main() -> Result<()> {
         post_play_coordinate_delay_seconds = config.post_play_coordinate_delay.as_secs(),
         death_trigger_text = %config.death_trigger_text,
         death_coordinate_delay_seconds = config.death_coordinate_delay.as_secs(),
+        removed_trigger_text = %config.removed_trigger_text,
+        removed_play_delay_seconds = config.removed_play_delay.as_secs(),
+        removed_coordinate_delay_seconds = config.removed_coordinate_delay.as_secs(),
         min_coordinate_cooldown_seconds = config.min_coordinate_cooldown.as_secs(),
         "starting osr bot"
     );
@@ -90,7 +96,7 @@ impl Config {
         let twitch_username = required_env("TWITCH_USERNAME")?.to_lowercase();
         let twitch_oauth_token = resolve_twitch_oauth_token().await?;
         let twitch_channel = normalize_channel(&required_env("TWITCH_CHANNEL")?);
-        let trigger_text = env_or_default("TRIGGER_TEXT", "game restarting").to_lowercase();
+        let trigger_text = env_or_default("TRIGGER_TEXT", "game is restarting").to_lowercase();
         let response_text = env_or_default("RESPONSE_TEXT", "!play");
         let response_delay = Duration::from_secs(env_or_u64("RESPONSE_DELAY_SECONDS", 45)?);
         let min_cooldown = Duration::from_secs(env_or_u64("MIN_COOLDOWN_SECONDS", 60)?);
@@ -102,6 +108,12 @@ impl Config {
             .to_lowercase();
         let death_coordinate_delay =
             Duration::from_secs(env_or_u64("DEATH_COORDINATE_DELAY_SECONDS", 5)?);
+        let removed_trigger_text = optional_env("REMOVED_TRIGGER_TEXT")
+            .unwrap_or_else(|| format!("@{twitch_username}, you have been removed from the game"))
+            .to_lowercase();
+        let removed_play_delay = Duration::from_secs(env_or_u64("REMOVED_PLAY_DELAY_SECONDS", 30)?);
+        let removed_coordinate_delay =
+            Duration::from_secs(env_or_u64("REMOVED_COORDINATE_DELAY_SECONDS", 30)?);
         let min_coordinate_cooldown =
             Duration::from_secs(env_or_u64("MIN_COORDINATE_COOLDOWN_SECONDS", 10)?);
 
@@ -125,6 +137,9 @@ impl Config {
             post_play_coordinate_delay,
             death_trigger_text,
             death_coordinate_delay,
+            removed_trigger_text,
+            removed_play_delay,
+            removed_coordinate_delay,
             min_coordinate_cooldown,
         })
     }
@@ -224,6 +239,11 @@ async fn handle_chat_message(
 
     let normalized_body = message.body.to_lowercase();
 
+    if normalized_body.contains(&config.removed_trigger_text) {
+        schedule_removed_recovery(config.clone(), Arc::clone(&writer), Arc::clone(&state)).await?;
+        return Ok(());
+    }
+
     if normalized_body.contains(&config.death_trigger_text) {
         schedule_coordinate_command(
             config.clone(),
@@ -239,12 +259,22 @@ async fn handle_chat_message(
         return Ok(());
     }
 
+    schedule_play_response(config.clone(), writer, state, config.response_delay, "restart").await
+}
+
+async fn schedule_play_response(
+    config: Config,
+    writer: SharedWriter,
+    state: SharedState,
+    delay: Duration,
+    reason: &'static str,
+) -> Result<()> {
     let now = Instant::now();
     {
         let mut state_guard = state.lock().await;
 
         if state_guard.pending_play {
-            info!("ignored trigger because response is already pending");
+            info!(reason, "ignored play response because one is already pending");
             return Ok(());
         }
 
@@ -252,9 +282,10 @@ async fn handle_chat_message(
             let elapsed = now.saturating_duration_since(last_play_sent);
             if elapsed < config.min_cooldown {
                 info!(
+                    reason,
                     elapsed_seconds = elapsed.as_secs(),
                     min_cooldown_seconds = config.min_cooldown.as_secs(),
-                    "ignored trigger because cooldown is active"
+                    "ignored play response because cooldown is active"
                 );
                 return Ok(());
             }
@@ -264,14 +295,14 @@ async fn handle_chat_message(
     }
 
     info!(
-        delay_seconds = config.response_delay.as_secs(),
+        reason,
+        delay_seconds = delay.as_secs(),
         response_text = %config.response_text,
-        "trigger detected; scheduling response"
+        "scheduling play response"
     );
 
-    let config = config.clone();
     tokio::spawn(async move {
-        tokio::time::sleep(config.response_delay).await;
+        tokio::time::sleep(delay).await;
 
         let result = async {
             write_irc_line(
@@ -285,7 +316,7 @@ async fn handle_chat_message(
             state_guard.pending_play = false;
             drop(state_guard);
 
-            info!(response_text = %config.response_text, "sent Twitch chat response");
+            info!(reason, response_text = %config.response_text, "sent Twitch chat response");
 
             schedule_coordinate_command(
                 config.clone(),
@@ -301,11 +332,34 @@ async fn handle_chat_message(
         .await;
 
         if let Err(err) = result {
-            error!(error = %err, "failed to send Twitch chat response or follow-up coordinate command");
+            error!(reason, error = %err, "failed to send Twitch chat response or follow-up coordinate command");
             let mut state_guard = state.lock().await;
             state_guard.pending_play = false;
         }
     });
+
+    Ok(())
+}
+
+async fn schedule_removed_recovery(config: Config, writer: SharedWriter, state: SharedState) -> Result<()> {
+    schedule_play_response(
+        config.clone(),
+        Arc::clone(&writer),
+        Arc::clone(&state),
+        config.removed_play_delay,
+        "removed",
+    )
+    .await?;
+
+    let config_for_coordinate = Config {
+        post_play_coordinate_delay: config.removed_coordinate_delay,
+        ..config
+    };
+
+    debug!(
+        removed_coordinate_delay_seconds = config_for_coordinate.post_play_coordinate_delay.as_secs(),
+        "scheduled removed recovery play; coordinate delay will use removed delay"
+    );
 
     Ok(())
 }
