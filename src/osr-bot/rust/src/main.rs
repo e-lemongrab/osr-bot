@@ -27,12 +27,19 @@ struct Config {
     response_text: String,
     response_delay: Duration,
     min_cooldown: Duration,
+    coordinate_command_text: Option<String>,
+    post_play_coordinate_delay: Duration,
+    death_trigger_text: String,
+    death_coordinate_delay: Duration,
+    min_coordinate_cooldown: Duration,
 }
 
 #[derive(Debug)]
 struct BotState {
     pending_play: bool,
     last_play_sent: Option<Instant>,
+    pending_coordinate: bool,
+    last_coordinate_sent: Option<Instant>,
 }
 
 type SharedWriter = Arc<Mutex<WriteHalf<TlsStream<TcpStream>>>>;
@@ -51,6 +58,11 @@ async fn main() -> Result<()> {
         response_text = %config.response_text,
         response_delay_seconds = config.response_delay.as_secs(),
         min_cooldown_seconds = config.min_cooldown.as_secs(),
+        coordinate_enabled = config.coordinate_command_text.is_some(),
+        post_play_coordinate_delay_seconds = config.post_play_coordinate_delay.as_secs(),
+        death_trigger_text = %config.death_trigger_text,
+        death_coordinate_delay_seconds = config.death_coordinate_delay.as_secs(),
+        min_coordinate_cooldown_seconds = config.min_coordinate_cooldown.as_secs(),
         "starting osr bot"
     );
 
@@ -82,6 +94,16 @@ impl Config {
         let response_text = env_or_default("RESPONSE_TEXT", "!play");
         let response_delay = Duration::from_secs(env_or_u64("RESPONSE_DELAY_SECONDS", 45)?);
         let min_cooldown = Duration::from_secs(env_or_u64("MIN_COOLDOWN_SECONDS", 60)?);
+        let coordinate_command_text = optional_env("COORDINATE_COMMAND_TEXT");
+        let post_play_coordinate_delay =
+            Duration::from_secs(env_or_u64("POST_PLAY_COORDINATE_DELAY_SECONDS", 5)?);
+        let death_trigger_text = optional_env("DEATH_TRIGGER_TEXT")
+            .unwrap_or_else(|| format!("@{twitch_username}, died"))
+            .to_lowercase();
+        let death_coordinate_delay =
+            Duration::from_secs(env_or_u64("DEATH_COORDINATE_DELAY_SECONDS", 5)?);
+        let min_coordinate_cooldown =
+            Duration::from_secs(env_or_u64("MIN_COORDINATE_COOLDOWN_SECONDS", 10)?);
 
         if trigger_text.trim().is_empty() {
             bail!("TRIGGER_TEXT cannot be empty");
@@ -99,6 +121,11 @@ impl Config {
             response_text,
             response_delay,
             min_cooldown,
+            coordinate_command_text,
+            post_play_coordinate_delay,
+            death_trigger_text,
+            death_coordinate_delay,
+            min_coordinate_cooldown,
         })
     }
 }
@@ -132,6 +159,8 @@ async fn run(config: Config) -> Result<()> {
     let state = Arc::new(Mutex::new(BotState {
         pending_play: false,
         last_play_sent: None,
+        pending_coordinate: false,
+        last_coordinate_sent: None,
     }));
 
     authenticate_and_join(&writer, &config).await?;
@@ -194,6 +223,18 @@ async fn handle_chat_message(
     }
 
     let normalized_body = message.body.to_lowercase();
+
+    if normalized_body.contains(&config.death_trigger_text) {
+        schedule_coordinate_command(
+            config.clone(),
+            Arc::clone(&writer),
+            Arc::clone(&state),
+            config.death_coordinate_delay,
+            "death",
+        )
+        .await?;
+    }
+
     if !normalized_body.contains(&config.trigger_text) {
         return Ok(());
     }
@@ -242,16 +283,99 @@ async fn handle_chat_message(
             let mut state_guard = state.lock().await;
             state_guard.last_play_sent = Some(Instant::now());
             state_guard.pending_play = false;
+            drop(state_guard);
 
             info!(response_text = %config.response_text, "sent Twitch chat response");
+
+            schedule_coordinate_command(
+                config.clone(),
+                Arc::clone(&writer),
+                Arc::clone(&state),
+                config.post_play_coordinate_delay,
+                "post_play",
+            )
+            .await?;
+
             Ok::<(), anyhow::Error>(())
         }
         .await;
 
         if let Err(err) = result {
-            error!(error = %err, "failed to send Twitch chat response");
+            error!(error = %err, "failed to send Twitch chat response or follow-up coordinate command");
             let mut state_guard = state.lock().await;
             state_guard.pending_play = false;
+        }
+    });
+
+    Ok(())
+}
+
+async fn schedule_coordinate_command(
+    config: Config,
+    writer: SharedWriter,
+    state: SharedState,
+    delay: Duration,
+    reason: &'static str,
+) -> Result<()> {
+    let Some(coordinate_command_text) = config.coordinate_command_text.clone() else {
+        debug!(reason, "coordinate command disabled");
+        return Ok(());
+    };
+
+    let now = Instant::now();
+    {
+        let mut state_guard = state.lock().await;
+
+        if state_guard.pending_coordinate {
+            info!(reason, "ignored coordinate command because one is already pending");
+            return Ok(());
+        }
+
+        if let Some(last_coordinate_sent) = state_guard.last_coordinate_sent {
+            let elapsed = now.saturating_duration_since(last_coordinate_sent);
+            if elapsed < config.min_coordinate_cooldown {
+                info!(
+                    reason,
+                    elapsed_seconds = elapsed.as_secs(),
+                    min_coordinate_cooldown_seconds = config.min_coordinate_cooldown.as_secs(),
+                    "ignored coordinate command because cooldown is active"
+                );
+                return Ok(());
+            }
+        }
+
+        state_guard.pending_coordinate = true;
+    }
+
+    info!(
+        reason,
+        delay_seconds = delay.as_secs(),
+        "scheduling coordinate command"
+    );
+
+    tokio::spawn(async move {
+        tokio::time::sleep(delay).await;
+
+        let result = async {
+            write_irc_line(
+                &writer,
+                &format!("PRIVMSG #{} :{}", config.twitch_channel, coordinate_command_text),
+            )
+            .await?;
+
+            let mut state_guard = state.lock().await;
+            state_guard.last_coordinate_sent = Some(Instant::now());
+            state_guard.pending_coordinate = false;
+
+            info!(reason, "sent coordinate command");
+            Ok::<(), anyhow::Error>(())
+        }
+        .await;
+
+        if let Err(err) = result {
+            error!(reason, error = %err, "failed to send coordinate command");
+            let mut state_guard = state.lock().await;
+            state_guard.pending_coordinate = false;
         }
     });
 
