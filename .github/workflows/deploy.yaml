@@ -121,6 +121,11 @@ jobs:
             --set-string config.responseText="$RESPONSE_TEXT" \
             --set-string config.responseDelaySeconds="$RESPONSE_DELAY_SECONDS" \
             --set-string config.minCooldownSeconds="$MIN_COOLDOWN_SECONDS" \
+            --set-string config.coordinateCommandText="$COORDINATE_COMMAND_TEXT" \
+            --set-string config.postPlayCoordinateDelaySeconds="$POST_PLAY_COORDINATE_DELAY_SECONDS" \
+            --set-string config.deathTriggerText="$DEATH_TRIGGER_TEXT" \
+            --set-string config.deathCoordinateDelaySeconds="$DEATH_COORDINATE_DELAY_SECONDS" \
+            --set-string config.minCoordinateCooldownSeconds="$MIN_COORDINATE_COOLDOWN_SECONDS" \
             --wait \
             --timeout 180s
         env:
@@ -134,3 +139,8 @@ jobs:
           RESPONSE_TEXT: ${{ secrets.RESPONSE_TEXT }}
           RESPONSE_DELAY_SECONDS: ${{ secrets.RESPONSE_DELAY_SECONDS }}
           MIN_COOLDOWN_SECONDS: ${{ secrets.MIN_COOLDOWN_SECONDS }}
+          COORDINATE_COMMAND_TEXT: ${{ secrets.COORDINATE_COMMAND_TEXT }}
+          POST_PLAY_COORDINATE_DELAY_SECONDS: ${{ secrets.POST_PLAY_COORDINATE_DELAY_SECONDS }}
+          DEATH_TRIGGER_TEXT: ${{ secrets.DEATH_TRIGGER_TEXT }}
+          DEATH_COORDINATE_DELAY_SECONDS: ${{ secrets.DEATH_COORDINATE_DELAY_SECONDS }}
+          MIN_COORDINATE_COOLDOWN_SECONDS: ${{ secrets.MIN_COORDINATE_COOLDOWN_SECONDS }}

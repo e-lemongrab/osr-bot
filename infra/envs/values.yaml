@@ -16,6 +16,11 @@ config:
   responseText: "!play"
   responseDelaySeconds: 45
   minCooldownSeconds: 60
+  coordinateCommandText: ""
+  postPlayCoordinateDelaySeconds: 5
+  deathTriggerText: ""
+  deathCoordinateDelaySeconds: 5
+  minCoordinateCooldownSeconds: 10
 
 resources:
   requests:

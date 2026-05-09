@@ -43,6 +43,16 @@ spec:
               value: {{ .Values.config.responseDelaySeconds | quote }}
             - name: MIN_COOLDOWN_SECONDS
               value: {{ .Values.config.minCooldownSeconds | quote }}
+            - name: COORDINATE_COMMAND_TEXT
+              value: {{ .Values.config.coordinateCommandText | quote }}
+            - name: POST_PLAY_COORDINATE_DELAY_SECONDS
+              value: {{ .Values.config.postPlayCoordinateDelaySeconds | quote }}
+            - name: DEATH_TRIGGER_TEXT
+              value: {{ .Values.config.deathTriggerText | quote }}
+            - name: DEATH_COORDINATE_DELAY_SECONDS
+              value: {{ .Values.config.deathCoordinateDelaySeconds | quote }}
+            - name: MIN_COORDINATE_COOLDOWN_SECONDS
+              value: {{ .Values.config.minCoordinateCooldownSeconds | quote }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       {{- with .Values.nodeSelector }}
