@@ -240,7 +240,15 @@ async fn handle_chat_message(
     let normalized_body = message.body.to_lowercase();
 
     if normalized_body.contains(&config.removed_trigger_text) {
-        schedule_removed_recovery(config.clone(), Arc::clone(&writer), Arc::clone(&state)).await?;
+        schedule_play_response(
+            config.clone(),
+            Arc::clone(&writer),
+            Arc::clone(&state),
+            config.removed_play_delay,
+            config.removed_coordinate_delay,
+            "removed",
+        )
+        .await?;
         return Ok(());
     }
 
@@ -259,14 +267,23 @@ async fn handle_chat_message(
         return Ok(());
     }
 
-    schedule_play_response(config.clone(), writer, state, config.response_delay, "restart").await
+    schedule_play_response(
+        config.clone(),
+        writer,
+        state,
+        config.response_delay,
+        config.post_play_coordinate_delay,
+        "restart",
+    )
+    .await
 }
 
 async fn schedule_play_response(
     config: Config,
     writer: SharedWriter,
     state: SharedState,
-    delay: Duration,
+    play_delay: Duration,
+    coordinate_delay: Duration,
     reason: &'static str,
 ) -> Result<()> {
     let now = Instant::now();
@@ -296,13 +313,13 @@ async fn schedule_play_response(
 
     info!(
         reason,
-        delay_seconds = delay.as_secs(),
+        delay_seconds = play_delay.as_secs(),
         response_text = %config.response_text,
         "scheduling play response"
     );
 
     tokio::spawn(async move {
-        tokio::time::sleep(delay).await;
+        tokio::time::sleep(play_delay).await;
 
         let result = async {
             write_irc_line(
@@ -322,8 +339,8 @@ async fn schedule_play_response(
                 config.clone(),
                 Arc::clone(&writer),
                 Arc::clone(&state),
-                config.post_play_coordinate_delay,
-                "post_play",
+                coordinate_delay,
+                reason,
             )
             .await?;
 
@@ -337,29 +354,6 @@ async fn schedule_play_response(
             state_guard.pending_play = false;
         }
     });
-
-    Ok(())
-}
-
-async fn schedule_removed_recovery(config: Config, writer: SharedWriter, state: SharedState) -> Result<()> {
-    schedule_play_response(
-        config.clone(),
-        Arc::clone(&writer),
-        Arc::clone(&state),
-        config.removed_play_delay,
-        "removed",
-    )
-    .await?;
-
-    let config_for_coordinate = Config {
-        post_play_coordinate_delay: config.removed_coordinate_delay,
-        ..config
-    };
-
-    debug!(
-        removed_coordinate_delay_seconds = config_for_coordinate.post_play_coordinate_delay.as_secs(),
-        "scheduled removed recovery play; coordinate delay will use removed delay"
-    );
 
     Ok(())
 }
