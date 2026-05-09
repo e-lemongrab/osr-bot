@@ -4,20 +4,48 @@ Authorized low-frequency Twitch chat helper for a single configured channel.
 
 ## Purpose
 
-The bot connects to one Twitch chat channel, listens for the configured trigger text, waits a short delay, and sends the configured response.
+`osr-bot` connects to one Twitch chat channel, listens for a configured restart message, waits a short delay, and sends a configured response.
 
-Default behavior:
+Current default behavior:
 
 - trigger: `game restarting`
 - delay: `45` seconds
 - response: `!play`
 - cooldown after response: `60` seconds
 
-The deployment is intentionally single-replica because multiple replicas could send duplicate chat messages.
+The app is intentionally designed as a single long-running process with in-memory state. It does not use a database.
+
+## Safety model
+
+The bot is not intended for spam, bot viewers, mass automation, or multi-channel use.
+
+The app:
+
+- only joins the configured Twitch channel;
+- only processes messages from that configured channel;
+- lowercases chat messages before trigger matching;
+- only reacts when the message contains the configured trigger text;
+- keeps a `pending_play` flag in memory;
+- ignores duplicate triggers while a response is pending;
+- applies a short cooldown after sending the response;
+- runs as a single Kubernetes replica.
+
+Expected duplicate handling:
+
+```text
+12:00:00 -> game restarting
+12:00:05 -> game restarting
+12:00:10 -> game restarting
+12:00:45 -> !play
+```
+
+Only one response should be sent.
 
 ## Runtime configuration
 
-Required:
+All deployment-time configuration is expected to come from GitHub Actions secrets and Helm `--set-string` values. Do not commit real tokens, kubeconfigs, PATs, or channel-specific sensitive data to the repository.
+
+Required Twitch configuration:
 
 - `TWITCH_USERNAME`: Twitch username used by the app.
 - `TWITCH_CHANNEL`: target channel. The app accepts both `channel` and `#channel` formats.
@@ -34,46 +62,13 @@ Fallback OAuth mode:
 
 If `TWITCH_REFRESH_TOKEN` is present, the app refreshes a new access token at startup and ignores `TWITCH_OAUTH_TOKEN` for authentication. If Twitch returns a rotated refresh token, the app logs a warning without printing the token value.
 
-Optional:
+Behavior configuration:
 
 - `TRIGGER_TEXT`: defaults to `game restarting`.
 - `RESPONSE_TEXT`: defaults to `!play`.
 - `RESPONSE_DELAY_SECONDS`: defaults to `45`.
 - `MIN_COOLDOWN_SECONDS`: defaults to `60`.
 - `RUST_LOG`: defaults to `info`.
-
-## Safety behavior
-
-The app:
-
-- only joins the configured channel;
-- ignores messages from non-configured channels;
-- lowercases chat messages before trigger matching;
-- only reacts when the message contains the configured trigger text;
-- keeps a `pending_play` flag in memory;
-- ignores duplicate triggers while a response is pending;
-- applies a short cooldown after sending the response.
-
-Expected duplicate handling:
-
-```text
-12:00:00 -> game restarting
-12:00:05 -> game restarting
-12:00:10 -> game restarting
-12:00:45 -> !play
-```
-
-Only one response should be sent.
-
-## Image registry
-
-The default image repository is GitHub Container Registry:
-
-```text
-ghcr.io/e-lemongrab/osr-bot
-```
-
-This avoids publishing the image under a personal Docker Hub namespace.
 
 ## Kubernetes
 
@@ -95,67 +90,103 @@ The Deployment hardcodes:
 replicas: 1
 ```
 
-Do not increase replicas unless the app is changed to use shared distributed locking.
+Do not increase replicas unless the app is changed to use shared distributed locking. Multiple replicas could send duplicate chat messages.
 
-## Helm deploy
+The pod runs as an unprivileged user and logs to stdout.
 
-Example command shape:
+## Image registry
 
-```bash
-helm upgrade --install osr-bot infra/chart/osr-bot \
-  --namespace osr-bot \
-  --create-namespace \
-  --values infra/envs/values.yaml \
-  --set-string image.repository="$IMAGE_REPOSITORY" \
-  --set-string image.tag="$IMAGE_TAG" \
-  --set-string config.twitchUsername="$TWITCH_USERNAME" \
-  --set-string config.twitchOauthToken="$TWITCH_OAUTH_TOKEN" \
-  --set-string config.twitchClientId="$TWITCH_CLIENT_ID" \
-  --set-string config.twitchClientSecret="$TWITCH_CLIENT_SECRET" \
-  --set-string config.twitchRefreshToken="$TWITCH_REFRESH_TOKEN" \
-  --set-string config.twitchChannel="$TWITCH_CHANNEL" \
-  --set-string config.triggerText="$TRIGGER_TEXT" \
-  --set-string config.responseText="$RESPONSE_TEXT" \
-  --set-string config.responseDelaySeconds="$RESPONSE_DELAY_SECONDS" \
-  --set-string config.minCooldownSeconds="$MIN_COOLDOWN_SECONDS" \
-  --wait \
-  --timeout 120s
+The default image repository is GitHub Container Registry:
+
+```text
+ghcr.io/e-lemongrab/osr-bot
 ```
 
-## CI/CD contract
+The package can remain private. For private GHCR pulls, the deploy workflow creates or updates a Kubernetes `docker-registry` pull secret from GitHub Actions secrets and passes it to Helm as `imagePullSecrets[0].name`.
 
-Project variables expected by the deploy pipeline:
+The container image must not contain secrets. Runtime secrets are injected only at deploy time.
 
-- `IMAGE_REPOSITORY`: defaults to `ghcr.io/e-lemongrab/osr-bot`.
+## CI/CD
+
+Deployment is handled by:
+
+```text
+.github/workflows/deploy.yaml
+```
+
+The workflow is manual via `workflow_dispatch` and accepts an `image_tag` input.
+
+Pipeline flow:
+
+1. Cross-compile the Rust binary for ARM64 using `aarch64-unknown-linux-gnu`.
+2. Stage the binary under `dist/osr-bot/osr-bot`.
+3. Build a runtime-only Docker image.
+4. Push the image to GHCR.
+5. Write kubeconfig from `KUBE_CONFIG_B64`.
+6. Create/update the GHCR image pull secret in Kubernetes.
+7. Deploy with Helm.
+
+The Dockerfile is runtime-only. It does not run `cargo build` inside Docker.
+
+## Required GitHub Actions secrets
+
+General deploy secrets:
+
+- `IMAGE_REPOSITORY`: for example `ghcr.io/e-lemongrab/osr-bot`.
+- `NAMESPACE`: for example `osr-bot`.
+- `KUBE_CONFIG_B64`: base64-encoded kubeconfig for the deploy user.
+
+GHCR pull secrets:
+
+- `GHCR_USERNAME`
+- `GHCR_PAT`: PAT with package read access.
+- `GHCR_EMAIL`
+- `IMAGE_PULL_SECRET_NAME`: for example `ghcr-pull-secret`.
+
+Twitch secrets:
+
 - `TWITCH_USERNAME`
 - `TWITCH_CHANNEL`
+- `TWITCH_CLIENT_ID`
+- `TWITCH_CLIENT_SECRET`
+- `TWITCH_REFRESH_TOKEN`
+- `TWITCH_OAUTH_TOKEN`: fallback access token.
 - `TRIGGER_TEXT`
 - `RESPONSE_TEXT`
 - `RESPONSE_DELAY_SECONDS`
 - `MIN_COOLDOWN_SECONDS`
 
-Project secrets expected by the deploy pipeline:
+## Public repository safety checklist
 
-- `TWITCH_CLIENT_ID`
-- `TWITCH_CLIENT_SECRET`
-- `TWITCH_REFRESH_TOKEN`
-- `TWITCH_OAUTH_TOKEN` as fallback
-- Kubernetes access credentials
+Before making this repository public, verify:
 
-For GHCR publishing from GitHub Actions, prefer the repository `GITHUB_TOKEN` with package write permissions instead of Docker Hub credentials.
+- no real OAuth tokens are committed;
+- no refresh tokens are committed;
+- no GitHub PATs are committed;
+- no kubeconfig is committed;
+- no `.env` files are committed;
+- no generated Kubernetes Secret manifests with real data are committed;
+- no workflow logs contain manually printed secrets;
+- no screenshots or markdown files contain private operational data.
 
-Never commit OAuth tokens, refresh tokens, or client secrets in clear text.
+The repository should be safe to make public if all sensitive values remain only in GitHub Actions secrets and Kubernetes secrets.
 
-## Build
+## Local build notes
 
-The container build context is the repository root and the Dockerfile is:
+The container build expects the ARM64 binary to exist at:
 
 ```text
-src/osr-bot/docker/Dockerfile
+dist/osr-bot/osr-bot
 ```
 
-Example image build:
+The CI workflow creates this file before Docker packaging.
+
+Example local ARM64 build shape:
 
 ```bash
+rustup target add aarch64-unknown-linux-gnu
+cargo build --release --target aarch64-unknown-linux-gnu --manifest-path src/osr-bot/rust/Cargo.toml
+mkdir -p dist/osr-bot
+cp target/aarch64-unknown-linux-gnu/release/osr-bot dist/osr-bot/osr-bot
 docker build -f src/osr-bot/docker/Dockerfile -t ghcr.io/e-lemongrab/osr-bot:local .
 ```
