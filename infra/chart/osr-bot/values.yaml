@@ -20,6 +20,9 @@ config:
   postPlayCoordinateDelaySeconds: 5
   deathTriggerText: ""
   deathCoordinateDelaySeconds: 5
+  removedTriggerText: ""
+  removedPlayDelaySeconds: 30
+  removedCoordinateDelaySeconds: 30
   minCoordinateCooldownSeconds: 10
 
 resources:
