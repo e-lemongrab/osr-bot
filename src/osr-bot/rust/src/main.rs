@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, WriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
+use tokio::time::{timeout, Instant as TokioInstant};
 use tokio_rustls::client::TlsStream;
 use tokio_rustls::rustls::crypto::ring::default_provider;
 use tokio_rustls::rustls::pki_types::ServerName;
@@ -21,7 +22,6 @@ const TWITCH_IRC_PORT: u16 = 6697;
 #[derive(Debug, Clone)]
 struct Config {
     twitch_username: String,
-    twitch_oauth_token: String,
     twitch_channel: String,
     trigger_text: String,
     response_text: String,
@@ -35,6 +35,8 @@ struct Config {
     removed_play_delay: Duration,
     removed_coordinate_delay: Duration,
     min_coordinate_cooldown: Duration,
+    irc_reconnect_interval: Duration,
+    irc_reconnect_backoff: Duration,
 }
 
 #[derive(Debug)]
@@ -53,7 +55,7 @@ async fn main() -> Result<()> {
     init_logging();
     install_rustls_crypto_provider();
 
-    let config = Config::from_env().await?;
+    let config = Config::from_env()?;
     info!(
         twitch_username = %config.twitch_username,
         twitch_channel = %config.twitch_channel,
@@ -69,6 +71,8 @@ async fn main() -> Result<()> {
         removed_play_delay_seconds = config.removed_play_delay.as_secs(),
         removed_coordinate_delay_seconds = config.removed_coordinate_delay.as_secs(),
         min_coordinate_cooldown_seconds = config.min_coordinate_cooldown.as_secs(),
+        irc_reconnect_interval_seconds = config.irc_reconnect_interval.as_secs(),
+        irc_reconnect_backoff_seconds = config.irc_reconnect_backoff.as_secs(),
         "starting osr bot"
     );
 
@@ -92,9 +96,8 @@ fn install_rustls_crypto_provider() {
 }
 
 impl Config {
-    async fn from_env() -> Result<Self> {
+    fn from_env() -> Result<Self> {
         let twitch_username = required_env("TWITCH_USERNAME")?.to_lowercase();
-        let twitch_oauth_token = resolve_twitch_oauth_token().await?;
         let twitch_channel = normalize_channel(&required_env("TWITCH_CHANNEL")?);
         let trigger_text = env_or_default("TRIGGER_TEXT", "game is restarting").to_lowercase();
         let response_text = env_or_default("RESPONSE_TEXT", "!play");
@@ -116,6 +119,10 @@ impl Config {
             Duration::from_secs(env_or_u64("REMOVED_COORDINATE_DELAY_SECONDS", 30)?);
         let min_coordinate_cooldown =
             Duration::from_secs(env_or_u64("MIN_COORDINATE_COOLDOWN_SECONDS", 10)?);
+        let irc_reconnect_interval =
+            Duration::from_secs(env_or_u64("IRC_RECONNECT_INTERVAL_SECONDS", 10_800)?);
+        let irc_reconnect_backoff =
+            Duration::from_secs(env_or_u64("IRC_RECONNECT_BACKOFF_SECONDS", 10)?);
 
         if trigger_text.trim().is_empty() {
             bail!("TRIGGER_TEXT cannot be empty");
@@ -127,7 +134,6 @@ impl Config {
 
         Ok(Self {
             twitch_username,
-            twitch_oauth_token,
             twitch_channel,
             trigger_text,
             response_text,
@@ -141,6 +147,8 @@ impl Config {
             removed_play_delay,
             removed_coordinate_delay,
             min_coordinate_cooldown,
+            irc_reconnect_interval,
+            irc_reconnect_backoff,
         })
     }
 }
@@ -157,6 +165,26 @@ async fn resolve_twitch_oauth_token() -> Result<String> {
 }
 
 async fn run(config: Config) -> Result<()> {
+    let state = Arc::new(Mutex::new(BotState {
+        pending_play: false,
+        last_play_sent: None,
+        pending_coordinate: false,
+        last_coordinate_sent: None,
+    }));
+
+    loop {
+        match run_irc_session(config.clone(), Arc::clone(&state)).await {
+            Ok(()) => warn!("Twitch IRC session ended; reconnecting"),
+            Err(error) => error!(error = %error, "Twitch IRC session failed; reconnecting"),
+        }
+
+        tokio::time::sleep(config.irc_reconnect_backoff).await;
+    }
+}
+
+async fn run_irc_session(config: Config, state: SharedState) -> Result<()> {
+    let twitch_oauth_token = resolve_twitch_oauth_token().await?;
+
     let tcp_stream = TcpStream::connect((TWITCH_IRC_HOST, TWITCH_IRC_PORT))
         .await
         .with_context(|| format!("failed to connect to {TWITCH_IRC_HOST}:{TWITCH_IRC_PORT}"))?;
@@ -171,21 +199,26 @@ async fn run(config: Config) -> Result<()> {
 
     let (reader, writer) = tokio::io::split(tls_stream);
     let writer = Arc::new(Mutex::new(writer));
-    let state = Arc::new(Mutex::new(BotState {
-        pending_play: false,
-        last_play_sent: None,
-        pending_coordinate: false,
-        last_coordinate_sent: None,
-    }));
 
-    authenticate_and_join(&writer, &config).await?;
+    authenticate_and_join(&writer, &config, &twitch_oauth_token).await?;
 
+    let reconnect_at = TokioInstant::now() + config.irc_reconnect_interval;
     let mut lines = BufReader::new(reader).lines();
-    while let Some(line) = lines
-        .next_line()
-        .await
-        .context("failed to read Twitch IRC line")?
-    {
+
+    loop {
+        let line = match timeout(reconnect_at.saturating_duration_since(TokioInstant::now()), lines.next_line()).await {
+            Ok(result) => result.context("failed to read Twitch IRC line")?,
+            Err(_) => {
+                info!("planned Twitch IRC reconnect before token/session expiry");
+                return Ok(());
+            }
+        };
+
+        let Some(line) = line else {
+            warn!("Twitch IRC stream ended");
+            return Ok(());
+        };
+
         debug!(irc_line = %line, "received IRC line");
 
         if let Some(payload) = line.strip_prefix("PING ") {
@@ -199,9 +232,6 @@ async fn run(config: Config) -> Result<()> {
             handle_chat_message(message, &config, Arc::clone(&writer), Arc::clone(&state)).await?;
         }
     }
-
-    warn!("Twitch IRC stream ended");
-    Ok(())
 }
 
 fn build_tls_connector() -> TlsConnector {
@@ -213,8 +243,8 @@ fn build_tls_connector() -> TlsConnector {
     TlsConnector::from(Arc::new(config))
 }
 
-async fn authenticate_and_join(writer: &SharedWriter, config: &Config) -> Result<()> {
-    write_irc_line(writer, &format!("PASS {}", config.twitch_oauth_token)).await?;
+async fn authenticate_and_join(writer: &SharedWriter, config: &Config, twitch_oauth_token: &str) -> Result<()> {
+    write_irc_line(writer, &format!("PASS {twitch_oauth_token}")).await?;
     write_irc_line(writer, &format!("NICK {}", config.twitch_username)).await?;
     write_irc_line(writer, &format!("JOIN #{}", config.twitch_channel)).await?;
 
