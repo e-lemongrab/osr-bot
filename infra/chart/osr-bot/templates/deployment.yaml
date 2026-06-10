@@ -35,6 +35,8 @@ spec:
               value: {{ .Values.config.twitchRefreshToken | quote }}
             - name: TWITCH_CHANNEL
               value: {{ required "config.twitchChannel is required" .Values.config.twitchChannel | quote }}
+            - name: GAME_MESSAGE_AUTHOR
+              value: {{ .Values.config.gameMessageAuthor | quote }}
             - name: TRIGGER_TEXT
               value: {{ .Values.config.triggerText | quote }}
             - name: RESPONSE_TEXT
