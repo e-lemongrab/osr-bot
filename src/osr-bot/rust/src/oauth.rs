@@ -46,7 +46,12 @@ pub async fn refresh_access_token(
     if !status.is_success() {
         let message = serde_json::from_str::<TwitchErrorResponse>(&body)
             .ok()
-            .and_then(|error| error.message.or(error.error).or_else(|| error.status.map(|s| s.to_string())))
+            .and_then(|error| {
+                error
+                    .message
+                    .or(error.error)
+                    .or_else(|| error.status.map(|s| s.to_string()))
+            })
             .unwrap_or_else(|| format!("HTTP {status}"));
         bail!("Twitch token refresh failed: {message}");
     }
@@ -55,7 +60,10 @@ pub async fn refresh_access_token(
         .context("failed to parse Twitch token refresh response")?;
 
     if let Some(expires_in) = refreshed.expires_in {
-        info!(expires_in_seconds = expires_in, "refreshed Twitch access token");
+        info!(
+            expires_in_seconds = expires_in,
+            "refreshed Twitch access token"
+        );
     } else {
         info!("refreshed Twitch access token");
     }

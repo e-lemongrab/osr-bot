@@ -65,6 +65,7 @@ If `TWITCH_REFRESH_TOKEN` is present, the app refreshes a new access token at st
 Behavior configuration:
 
 - `TRIGGER_TEXT`: defaults to `game restarting`.
+- `GAME_MESSAGE_AUTHOR`: trusted Twitch login for game event messages. Defaults to `TWITCH_CHANNEL`.
 - `RESPONSE_TEXT`: defaults to `!play`.
 - `RESPONSE_DELAY_SECONDS`: defaults to `45`.
 - `MIN_COOLDOWN_SECONDS`: defaults to `60`.
@@ -152,6 +153,7 @@ Twitch secrets:
 - `TWITCH_REFRESH_TOKEN`
 - `TWITCH_OAUTH_TOKEN`: fallback access token.
 - `TRIGGER_TEXT`
+- `GAME_MESSAGE_AUTHOR`
 - `RESPONSE_TEXT`
 - `RESPONSE_DELAY_SECONDS`
 - `MIN_COOLDOWN_SECONDS`

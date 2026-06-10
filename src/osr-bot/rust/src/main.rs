@@ -23,6 +23,7 @@ const TWITCH_IRC_PORT: u16 = 6697;
 struct Config {
     twitch_username: String,
     twitch_channel: String,
+    game_message_author: String,
     trigger_text: String,
     response_text: String,
     response_delay: Duration,
@@ -60,6 +61,7 @@ async fn main() -> Result<()> {
     info!(
         twitch_username = %config.twitch_username,
         twitch_channel = %config.twitch_channel,
+        game_message_author = %config.game_message_author,
         trigger_text = %config.trigger_text,
         response_text = %config.response_text,
         response_delay_seconds = config.response_delay.as_secs(),
@@ -101,6 +103,9 @@ impl Config {
     fn from_env() -> Result<Self> {
         let twitch_username = required_env("TWITCH_USERNAME")?.to_lowercase();
         let twitch_channel = normalize_channel(&required_env("TWITCH_CHANNEL")?);
+        let game_message_author = optional_env("GAME_MESSAGE_AUTHOR")
+            .map(|author| normalize_channel(&author))
+            .unwrap_or_else(|| twitch_channel.clone());
         let trigger_text = env_or_default("TRIGGER_TEXT", "game is restarting").to_lowercase();
         let response_text = env_or_default("RESPONSE_TEXT", "!play");
         let response_delay = Duration::from_secs(env_or_u64("RESPONSE_DELAY_SECONDS", 45)?);
@@ -139,6 +144,7 @@ impl Config {
         Ok(Self {
             twitch_username,
             twitch_channel,
+            game_message_author,
             trigger_text,
             response_text,
             response_delay,
@@ -162,11 +168,15 @@ async fn resolve_chat_login_password() -> Result<String> {
     if let Some(refresh_value) = optional_env(concat!("TWITCH_", "REFRESH_TOKEN")) {
         let client_id = required_env("TWITCH_CLIENT_ID")?;
         let client_secret = required_env(concat!("TWITCH_CLIENT_", "SECRET"))?;
-        let access_value = oauth::refresh_access_token(&client_id, &client_secret, &refresh_value).await?;
+        let access_value =
+            oauth::refresh_access_token(&client_id, &client_secret, &refresh_value).await?;
         return Ok(normalize_oauth_token(&access_value));
     }
 
-    Ok(normalize_oauth_token(&required_env(concat!("TWITCH_", "OAUTH_TOKEN"))?))
+    Ok(normalize_oauth_token(&required_env(concat!(
+        "TWITCH_",
+        "OAUTH_TOKEN"
+    ))?))
 }
 
 async fn run(config: Config) -> Result<()> {
@@ -232,7 +242,12 @@ async fn run_irc_session(
     let mut lines = BufReader::new(reader).lines();
 
     loop {
-        let line = match timeout(reconnect_at.saturating_duration_since(TokioInstant::now()), lines.next_line()).await {
+        let line = match timeout(
+            reconnect_at.saturating_duration_since(TokioInstant::now()),
+            lines.next_line(),
+        )
+        .await
+        {
             Ok(result) => result.context("failed to read Twitch IRC line")?,
             Err(_) => {
                 info!("planned Twitch IRC reconnect before token/session expiry");
@@ -269,7 +284,11 @@ fn build_tls_connector() -> TlsConnector {
     TlsConnector::from(Arc::new(config))
 }
 
-async fn authenticate_and_join(writer: &SharedWriter, config: &Config, chat_login_password: &str) -> Result<()> {
+async fn authenticate_and_join(
+    writer: &SharedWriter,
+    config: &Config,
+    chat_login_password: &str,
+) -> Result<()> {
     write_irc_line(writer, &format!("PASS {chat_login_password}")).await?;
     write_irc_line(writer, &format!("NICK {}", config.twitch_username)).await?;
     write_irc_line(writer, &format!("JOIN #{}", config.twitch_channel)).await?;
@@ -294,6 +313,16 @@ async fn handle_chat_message(
     }
 
     let normalized_body = message.body.to_lowercase();
+
+    if is_untrusted_game_trigger(&message, &normalized_body, config) {
+        warn!(
+            sender = %message.sender,
+            expected_author = %config.game_message_author,
+            message_channel = %message.channel,
+            "ignored spoofable game trigger from untrusted Twitch user"
+        );
+        return Ok(());
+    }
 
     if normalized_body.contains(&config.removed_trigger_text) {
         schedule_play_response(
@@ -334,6 +363,20 @@ async fn handle_chat_message(
     .await
 }
 
+fn contains_game_trigger(normalized_body: &str, config: &Config) -> bool {
+    normalized_body.contains(&config.removed_trigger_text)
+        || normalized_body.contains(&config.death_trigger_text)
+        || normalized_body.contains(&config.trigger_text)
+}
+
+fn is_untrusted_game_trigger(
+    message: &ChatMessage,
+    normalized_body: &str,
+    config: &Config,
+) -> bool {
+    contains_game_trigger(normalized_body, config) && message.sender != config.game_message_author
+}
+
 async fn schedule_play_response(
     config: Config,
     writer: SharedWriter,
@@ -347,7 +390,10 @@ async fn schedule_play_response(
         let mut state_guard = state.lock().await;
 
         if state_guard.pending_play {
-            info!(reason, "ignored play response because one is already pending");
+            info!(
+                reason,
+                "ignored play response because one is already pending"
+            );
             return Ok(());
         }
 
@@ -380,7 +426,10 @@ async fn schedule_play_response(
         let result = async {
             write_irc_line(
                 &writer,
-                &format!("PRIVMSG #{} :{}", config.twitch_channel, config.response_text),
+                &format!(
+                    "PRIVMSG #{} :{}",
+                    config.twitch_channel, config.response_text
+                ),
             )
             .await?;
 
@@ -431,7 +480,10 @@ async fn schedule_coordinate_command(
         let mut state_guard = state.lock().await;
 
         if state_guard.pending_coordinate {
-            info!(reason, "ignored coordinate command because one is already pending");
+            info!(
+                reason,
+                "ignored coordinate command because one is already pending"
+            );
             return Ok(());
         }
 
@@ -463,7 +515,10 @@ async fn schedule_coordinate_command(
         let result = async {
             write_irc_line(
                 &writer,
-                &format!("PRIVMSG #{} :{}", config.twitch_channel, coordinate_command_text),
+                &format!(
+                    "PRIVMSG #{} :{}",
+                    config.twitch_channel, coordinate_command_text
+                ),
             )
             .await?;
 
@@ -498,20 +553,34 @@ async fn write_irc_line(writer: &SharedWriter, line: &str) -> Result<()> {
 
 #[derive(Debug)]
 struct ChatMessage {
+    sender: String,
     channel: String,
     body: String,
 }
 
 impl ChatMessage {
     fn parse(line: &str) -> Option<Self> {
-        let privmsg_index = line.find(" PRIVMSG #")?;
-        let after_privmsg = &line[privmsg_index + " PRIVMSG #".len()..];
+        let line = if line.starts_with('@') {
+            line.split_once(' ')?.1
+        } else {
+            line
+        };
+
+        let after_prefix = line.strip_prefix(':')?;
+        let (prefix, after_prefix) = after_prefix.split_once(' ')?;
+        let sender = prefix.split_once('!')?.0.to_lowercase();
+
+        let after_privmsg = after_prefix.strip_prefix("PRIVMSG #")?;
         let separator = after_privmsg.find(" :")?;
 
         let channel = after_privmsg[..separator].to_lowercase();
         let body = after_privmsg[separator + 2..].to_string();
 
-        Some(Self { channel, body })
+        Some(Self {
+            sender,
+            channel,
+            body,
+        })
     }
 }
 
@@ -561,5 +630,92 @@ fn normalize_oauth_token(token: &str) -> String {
         token.to_string()
     } else {
         format!("oauth:{token}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_config() -> Config {
+        Config {
+            twitch_username: "burzvarg".to_string(),
+            twitch_channel: "onestreamrpg".to_string(),
+            game_message_author: "onestreamrpg".to_string(),
+            trigger_text: "game is restarting".to_string(),
+            response_text: "!play".to_string(),
+            response_delay: Duration::from_secs(45),
+            min_cooldown: Duration::from_secs(60),
+            coordinate_command_text: Some("!coord".to_string()),
+            post_play_coordinate_delay: Duration::from_secs(5),
+            death_trigger_text: "@burzvarg, died".to_string(),
+            death_coordinate_delay: Duration::from_secs(5),
+            removed_trigger_text: "@burzvarg, you have been removed from the game".to_string(),
+            removed_play_delay: Duration::from_secs(30),
+            removed_coordinate_delay: Duration::from_secs(30),
+            min_coordinate_cooldown: Duration::from_secs(10),
+            irc_reconnect_interval: Duration::from_secs(10_800),
+            irc_reconnect_backoff: Duration::from_secs(10),
+            irc_reconnect_play_delay: Duration::from_secs(30),
+        }
+    }
+
+    #[test]
+    fn parses_privmsg_without_tags() {
+        let message = ChatMessage::parse(
+            ":crapfairy!crapfairy@crapfairy.tmi.twitch.tv PRIVMSG #onestreamrpg :hello chat",
+        )
+        .expect("PRIVMSG should parse");
+
+        assert_eq!(message.sender, "crapfairy");
+        assert_eq!(message.channel, "onestreamrpg");
+        assert_eq!(message.body, "hello chat");
+    }
+
+    #[test]
+    fn parses_privmsg_with_ircv3_tags() {
+        let message = ChatMessage::parse(
+            "@badge-info=;badges=;color=#1E90FF :crapfairy!crapfairy@crapfairy.tmi.twitch.tv PRIVMSG #onestreamrpg :hello with tags",
+        )
+        .expect("tagged PRIVMSG should parse");
+
+        assert_eq!(message.sender, "crapfairy");
+        assert_eq!(message.channel, "onestreamrpg");
+        assert_eq!(message.body, "hello with tags");
+    }
+
+    #[test]
+    fn flags_spoofed_game_trigger_from_untrusted_sender() {
+        let config = test_config();
+        let message = ChatMessage {
+            sender: "crapfairy".to_string(),
+            channel: "onestreamrpg".to_string(),
+            body: "onestreamrpg: @burzvarg, You have been removed from the game".to_string(),
+        };
+        let normalized_body = message.body.to_lowercase();
+
+        assert!(is_untrusted_game_trigger(
+            &message,
+            &normalized_body,
+            &config
+        ));
+    }
+
+    #[test]
+    fn accepts_game_trigger_from_configured_sender() {
+        let config = test_config();
+        let message = ChatMessage {
+            sender: "onestreamrpg".to_string(),
+            channel: "onestreamrpg".to_string(),
+            body: "onestreamrpg: @burzvarg, You have been removed from the game".to_string(),
+        };
+        let normalized_body = message.body.to_lowercase();
+
+        assert!(contains_game_trigger(&normalized_body, &config));
+        assert!(!is_untrusted_game_trigger(
+            &message,
+            &normalized_body,
+            &config
+        ));
     }
 }
