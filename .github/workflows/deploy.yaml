@@ -68,7 +68,13 @@ jobs:
         with:
           context: .
           file: src/osr-bot/docker/Dockerfile
+          # provenance/sbom off keep this a plain manifest rather than an OCI
+          # index. buildx wraps even a single-platform build in an index when
+          # they are on, and GHCR lists that index's children as untagged
+          # versions — which is what makes pruning "untagged" break live images.
           platforms: linux/arm64
+          provenance: false
+          sbom: false
           push: true
           tags: |
             ${{ env.IMAGE_REPOSITORY }}:${{ env.IMAGE_TAG }}
