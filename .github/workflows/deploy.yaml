@@ -82,6 +82,13 @@ jobs:
           cache-from: type=gha,scope=osr-bot-package-image
           cache-to: type=gha,scope=osr-bot-package-image,mode=max
 
+      - name: Prune old osr-bot versions
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: osr-bot
+          package-type: container
+          min-versions-to-keep: 5
+
       - name: Set up Helm
         uses: azure/setup-helm@v4
 
