@@ -4,9 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: Image tag to build and deploy
-        required: true
-        default: latest
+        description: >-
+          Existing tag to redeploy, for rolling back. Leave empty to build the
+          current commit and deploy it by its SHA.
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -17,7 +19,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       IMAGE_REPOSITORY: ${{ secrets.IMAGE_REPOSITORY }}
-      IMAGE_TAG: ${{ inputs.image_tag }}
       NAMESPACE: ${{ secrets.NAMESPACE }}
       TARGET_TRIPLE: aarch64-unknown-linux-gnu
       CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
@@ -25,6 +26,19 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Resolve image tag
+        run: |
+          # Deploying :latest meant the running bot silently changed to whatever
+          # latest pointed at on any pod restart — imagePullPolicy is Always — and
+          # the cluster could not tell you which commit was running. The SHA is
+          # immutable and ties the pod to an exact commit.
+          if [ -n "${{ inputs.image_tag }}" ]; then
+            TAG="${{ inputs.image_tag }}"
+          else
+            TAG="$GITHUB_SHA"
+          fi
+          echo "IMAGE_TAG=$TAG" >> "$GITHUB_ENV"
 
       - name: Install ARM64 cross toolchain
         shell: bash
