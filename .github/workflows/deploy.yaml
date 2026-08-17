@@ -153,7 +153,8 @@ jobs:
           MIN_COORDINATE_COOLDOWN_SECONDS: ${{ secrets.MIN_COORDINATE_COOLDOWN_SECONDS }}
 
       - name: Verify deployed image
-        run: |
-          chmod +x scripts/ci/verify-deployed-image.sh
-          scripts/ci/verify-deployed-image.sh "$NAMESPACE" deploy/osr-bot \
-            "$IMAGE_REPOSITORY:$IMAGE_TAG"
+        uses: e-lemongrab/arc-system/.github/actions/verify-deployed-image@master
+        with:
+          namespace: ${{ env.NAMESPACE }}
+          workload: deploy/osr-bot
+          image: ${{ env.IMAGE_REPOSITORY }}:${{ env.IMAGE_TAG }}
