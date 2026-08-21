@@ -174,8 +174,12 @@ jobs:
           MIN_COORDINATE_COOLDOWN_SECONDS: ${{ secrets.MIN_COORDINATE_COOLDOWN_SECONDS }}
 
       - name: Verify deployed image
-        uses: e-lemongrab/arc-system/.github/actions/verify-deployed-image@master
-        with:
-          namespace: ${{ env.NAMESPACE }}
-          workload: deploy/osr-bot
-          image: ${{ env.IMAGE_REPOSITORY }}:${{ env.IMAGE_TAG }}
+        # A vendored copy, unlike the other repos which use the shared action in
+        # arc-system. This repository is public and arc-system is private, and a
+        # public repo cannot consume an action from a private one. arc-system
+        # cannot be made public either: it holds committed kubeconfigs with
+        # non-expiring service-account tokens. Keep this in sync by hand.
+        run: |
+          chmod +x scripts/ci/verify-deployed-image.sh
+          scripts/ci/verify-deployed-image.sh "$NAMESPACE" deploy/osr-bot \
+            "$IMAGE_REPOSITORY:$IMAGE_TAG"
