@@ -15,19 +15,20 @@ permissions:
   packages: write
 
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.image.outputs.tag }}
     env:
       IMAGE_REPOSITORY: ${{ secrets.IMAGE_REPOSITORY }}
-      NAMESPACE: ${{ secrets.NAMESPACE }}
       TARGET_TRIPLE: aarch64-unknown-linux-gnu
       CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-      GHCR_SECRET_NAME: ghcr-pull-secret
     steps:
       - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
 
       - name: Resolve image tag
+        id: image
         run: |
           # Deploying :latest meant the running bot silently changed to whatever
           # latest pointed at on any pod restart — imagePullPolicy is Always — and
@@ -39,6 +40,7 @@ jobs:
             TAG="$GITHUB_SHA"
           fi
           echo "IMAGE_TAG=$TAG" >> "$GITHUB_ENV"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Install ARM64 cross toolchain
         shell: bash
@@ -103,16 +105,22 @@ jobs:
           package-type: container
           min-versions-to-keep: 5
 
+  deploy:
+    runs-on: arc-osr-bot
+    needs: build
+    env:
+      IMAGE_REPOSITORY: ${{ secrets.IMAGE_REPOSITORY }}
+      NAMESPACE: ${{ secrets.NAMESPACE }}
+      GHCR_SECRET_NAME: ghcr-pull-secret
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede  # v4
+
       - name: Set up Helm
         uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4  # v4
-
-      - name: Configure kubeconfig
-        run: |
-          mkdir -p "$HOME/.kube"
-          echo "$KUBE_CONFIG_B64" | base64 -d > "$HOME/.kube/config"
-          chmod 600 "$HOME/.kube/config"
-        env:
-          KUBE_CONFIG_B64: ${{ secrets.KUBE_CONFIG_B64 }}
 
       - name: Configure GHCR image pull secret
         shell: bash
@@ -135,7 +143,7 @@ jobs:
             --namespace "$NAMESPACE" \
             --values infra/envs/values.yaml \
             --set-string image.repository="$IMAGE_REPOSITORY" \
-            --set-string image.tag="$IMAGE_TAG" \
+            --set-string image.tag="${{ needs.build.outputs.tag }}" \
             --set-string image.pullPolicy=Always \
             --set-string imagePullSecrets[0].name="$GHCR_SECRET_NAME" \
             --set-string config.twitchUsername="$TWITCH_USERNAME" \
@@ -174,8 +182,12 @@ jobs:
           MIN_COORDINATE_COOLDOWN_SECONDS: ${{ secrets.MIN_COORDINATE_COOLDOWN_SECONDS }}
 
       - name: Verify deployed image
-        uses: e-lemongrab/arc-system/.github/actions/verify-deployed-image@master
-        with:
-          namespace: ${{ env.NAMESPACE }}
-          workload: deploy/osr-bot
-          image: ${{ env.IMAGE_REPOSITORY }}:${{ env.IMAGE_TAG }}
+        # A vendored copy, unlike the other repos which use the shared action in
+        # arc-system. This repository is public and arc-system is private, and a
+        # public repo cannot consume an action from a private one. arc-system
+        # cannot be made public either: it holds committed kubeconfigs with
+        # non-expiring service-account tokens. Keep this in sync by hand.
+        run: |
+          chmod +x scripts/ci/verify-deployed-image.sh
+          scripts/ci/verify-deployed-image.sh "$NAMESPACE" deploy/osr-bot \
+            "$IMAGE_REPOSITORY:${{ needs.build.outputs.tag }}"
